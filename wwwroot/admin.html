@@ -6,7 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     :root{--green:#15a34a;--red:#ef4444;--yellow:#f59e0b;--bg:#0b0f14;--card:#10161d;--text:#dbe3ec;--muted:#92a3b4}
-    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Inter,Arial,sans-serif}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Inter,Arial,sans-serif}
     .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
     h1{font-size:22px;margin:0 0 16px}
     .bar{display:flex;gap:8px;margin:14px 0}
@@ -78,7 +79,11 @@ function selectedIds(){ return Array.from(document.querySelectorAll('tbody input
 async function fetchUsers(){
   try{
     const res = await fetch(API('all'), { cache:'no-store' });
-    if (res.status === 401) { location.href = 'login.html'; return; } 
+    if (res.status === 401 || res.status === 440) {
+      alert("Session expired or you blocked your own account. Redirecting to login…");
+      location.href = 'login.html';
+      return;
+    }
     const text = await res.text(); let data; try { data = JSON.parse(text); } catch { data = null; }
     if(!res.ok){ showError(`GET /api/User/all failed (${res.status})`, text); rowsEl.innerHTML = `<tr><td colspan="5">Failed to load users.</td></tr>`; return; }
     if(!Array.isArray(data)){ showError('Unexpected response from /api/User/all', text); rowsEl.innerHTML = `<tr><td colspan="5">Bad response.</td></tr>`; return; }
@@ -109,11 +114,18 @@ async function doAction(endpoint, ids){
       headers: { 'Content-Type':'application/json' },
       body: ids ? JSON.stringify({ ids }) : null
     });
-    if (res.status === 401) { location.href = 'login.html'; return; }
-    const text = await res.text();
-    if(!res.ok){ showError(`POST /api/User/${endpoint} failed (${res.status})`, text); return; }
+
+    const text = await res.text(); let data = {}; try { data = JSON.parse(text); } catch {}
+
+    if (res.status === 401 || res.status === 440) {
+      alert(data.message || "Session expired. Logging out…");
+      location.href = 'login.html';
+      return;
+    }
+
+    if (!res.ok) { showError(`POST /api/User/${endpoint} failed (${res.status})`, text); return; }
     await fetchUsers();
-  }catch(e){
+  } catch (e) {
     showError(`Network/JS error calling /api/User/${endpoint}`, String(e && e.stack || e));
   }
 }
@@ -121,7 +133,8 @@ async function doAction(endpoint, ids){
 document.getElementById('btnBlock').onclick    = () => doAction('block', selectedIds());
 document.getElementById('btnUnblock').onclick  = () => doAction('unblock', selectedIds());
 document.getElementById('btnDelete').onclick   = () => doAction('delete', selectedIds());
-document.getElementById('btnDeleteUnv').onclick= () => doAction('delete-unverified');
+document.getElementById('btnDeleteUnv').onclick = () => doAction('delete-unverified', selectedIds());
+
 
 fetchUsers();
 </script>

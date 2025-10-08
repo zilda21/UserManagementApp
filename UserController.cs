@@ -61,7 +61,6 @@ namespace UserManagementApp.Controllers
             }
             catch (Exception ex)
             {
-                // This is the key change: surface the real cause so the page shows it
                 return StatusCode(500, new { message = "Registration failed: " + ex.GetBaseException().Message });
             }
 
@@ -111,7 +110,9 @@ namespace UserManagementApp.Controllers
 
             Response.Cookies.Append("uid", user.Id.ToString(), new CookieOptions
             {
-                HttpOnly = false, SameSite = SameSiteMode.Lax, Expires = DateTimeOffset.UtcNow.AddDays(1)
+                HttpOnly = false,
+                SameSite = SameSiteMode.Lax,
+                Expires = DateTimeOffset.UtcNow.AddDays(1)
             });
 
             return Ok(new { message = "Login successful", status = user.Status, id = user.Id });
@@ -137,8 +138,32 @@ namespace UserManagementApp.Controllers
                 return BadRequest(new { message = "No user ids provided." });
 
             var users = await _db.Users.Where(u => dto.Ids.Contains(u.Id)).ToListAsync();
-            foreach (var u in users) u.Status = "blocked";
+            bool blockedSelf = false;
+
+            if (Request.Cookies.TryGetValue("uid", out var uidStr) &&
+                int.TryParse(uidStr, out var currentUserId))
+            {
+                foreach (var u in users)
+                {
+                    u.Status = "blocked";
+                    if (u.Id == currentUserId)
+                        blockedSelf = true;
+                }
+            }
+            else
+            {
+                foreach (var u in users)
+                    u.Status = "blocked";
+            }
+
             await _db.SaveChangesAsync();
+
+            if (blockedSelf)
+            {
+                Response.Cookies.Delete("uid");
+                return StatusCode(440, new { message = "You blocked your own account. Logging out..." });
+            }
+
             return Ok(new { message = "Selected users blocked." });
         }
 
@@ -150,22 +175,40 @@ namespace UserManagementApp.Controllers
                 return BadRequest(new { message = "No user ids provided." });
 
             var users = await _db.Users.Where(u => dto.Ids.Contains(u.Id)).ToListAsync();
+
             foreach (var u in users)
-                u.Status = (u.VerificationToken != null) ? "unverified" : "active";
+            {
+                if (!string.IsNullOrEmpty(u.VerificationToken))
+                    u.Status = "unverified";
+                else
+                    u.Status = "active";
+            }
 
             await _db.SaveChangesAsync();
-            return Ok(new { message = "Selected users unblocked." });
+            return Ok(new { message = "Selected users unblocked (verification preserved)." });
         }
 
-        [RequireUser]
-        [HttpPost("delete-unverified")]
-        public async Task<IActionResult> DeleteUnverified()
-        {
-            var toDelete = await _db.Users.Where(u => u.Status == "unverified").ToListAsync();
-            _db.Users.RemoveRange(toDelete);
-            await _db.SaveChangesAsync();
-            return Ok(new { message = $"Deleted {toDelete.Count} unverified users." });
-        }
+      [RequireUser]
+[HttpPost("delete-unverified")]
+public async Task<IActionResult> DeleteUnverified([FromBody] IdsDto dto)
+{
+   
+    if (dto?.Ids == null || dto.Ids.Count == 0)
+        return BadRequest(new { message = "Select at least one user." });
+
+   
+    var toDelete = await _db.Users
+        .Where(u => dto.Ids.Contains(u.Id) && u.Status == "unverified")
+        .ToListAsync();
+
+    if (toDelete.Count == 0)
+        return NoContent();
+
+    _db.Users.RemoveRange(toDelete);
+    await _db.SaveChangesAsync();
+    return Ok(new { deleted = toDelete.Select(u => u.Id).ToArray() });
+}
+
 
         [RequireUser]
         [HttpPost("delete")]

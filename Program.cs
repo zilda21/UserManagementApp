@@ -3,7 +3,7 @@ using UserManagementApp.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// SQL Server with retry (helps “No process on the other end of the pipe” etc.)
+
 builder.Services.AddDbContext<AppDbContext>(opt =>
     opt.UseSqlServer(
         builder.Configuration.GetConnectionString("DefaultConnection"),
@@ -22,7 +22,7 @@ app.UseStaticFiles();
 app.MapControllers();
 app.MapGet("/", () => Results.Redirect("/login.html"));
 
-// Try to ensure table exists (won’t crash app if it fails)
+
 try
 {
     using var scope = app.Services.CreateScope();
