@@ -14,6 +14,7 @@ namespace UserManagementApp.Data
             b.Entity<User>(e =>
             {
                 e.ToTable("Users");
+                e.HasKey(p => p.Id);
                 e.Property(p => p.Name).HasMaxLength(100).IsRequired();
                 e.Property(p => p.Email).HasMaxLength(200).IsRequired();
                 e.Property(p => p.Password).HasMaxLength(255).IsRequired();
