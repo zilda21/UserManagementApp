@@ -1,66 +1,45 @@
 using Microsoft.EntityFrameworkCore;
+using Pomelo.EntityFrameworkCore.MySql.Infrastructure;
 using UserManagementApp.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Get the raw connection string once
-var cs = builder.Configuration.GetConnectionString("DefaultConnection")!;
-
-// Pomelo + MariaDB with AutoDetect and transient retry
+// MySQL / MariaDB (AlwaysData ~ MariaDB 10.11.x)
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseMySql(
-        cs,
-        ServerVersion.AutoDetect(cs),
-        mySqlOptions => mySqlOptions.EnableRetryOnFailure(5, TimeSpan.FromSeconds(10), null)
+        builder.Configuration.GetConnectionString("DefaultConnection"),
+        new MySqlServerVersion(new Version(10, 11, 14)),
+        my => my.EnableRetryOnFailure(5, TimeSpan.FromSeconds(2), null)
     )
 );
 
-builder.Services.AddControllersWithViews();
+builder.Services.AddControllers();
+builder.Services.AddCors(o => o.AddPolicy("AllowAll",
+    p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
 var app = builder.Build();
 
-// Try the DB connection at startup so errors go to logs
-using (var scope = app.Services.CreateScope())
-{
-    try
-    {
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await db.Database.OpenConnectionAsync();
-        await db.Database.CloseConnectionAsync();
+app.UseCors("AllowAll");
 
-        // If you're using EF migrations and want the app to create tables automatically:
-        // await db.Database.MigrateAsync();
-        // Otherwise you already created the Users table manually — that’s fine too.
-    }
-    catch (Exception ex)
-    {
-        app.Logger.LogError(ex, "Database connection failed. Check connection string and DB user rights.");
-    }
-}
-
-if (!app.Environment.IsDevelopment())
-{
-    app.UseExceptionHandler("/Home/Error");
-    app.UseHsts();
-}
-
-app.UseHttpsRedirection();
-
-// Optional: makes "/" map to /index.html in wwwroot
-app.UseDefaultFiles();              // <= optional
-
-// Required: actually serves wwwroot files (register.html, css, js, etc.)
+// serve files from wwwroot (index.html / login.html etc.)
+app.UseDefaultFiles();
 app.UseStaticFiles();
 
-app.UseRouting();
-app.UseAuthorization();
+app.MapControllers();
 
-app.MapControllerRoute(
-    name: "default",
-    pattern: "{controller=Home}/{action=Index}/{id?}");
+// optional: hard redirect root to login if you prefer
+// app.MapGet("/", () => Results.Redirect("/login.html"));
 
-app.MapGet("/healthz", async (AppDbContext db)
-    => await db.Database.CanConnectAsync() ? Results.Ok("ok") : Results.Problem("db"));
+// ensure DB + tables exist
+try
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.EnsureCreatedAsync();
+}
+catch (Exception ex)
+{
+    app.Logger.LogError(ex, "Database initialization failed at startup.");
+}
 
 app.Run();
-

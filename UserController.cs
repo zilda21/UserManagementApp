@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using UserManagementApp.Attributes;
 using UserManagementApp.Data;
 using AppUser = UserManagementApp.Models.User;
+using MySqlConnector;
 
 namespace UserManagementApp.Controllers
 {
@@ -17,15 +18,11 @@ namespace UserManagementApp.Controllers
         public record LoginDto(string Email, string Password);
         public class IdsDto { public List<int> Ids { get; set; } = new(); }
 
-       private static bool IsUniqueViolation(DbUpdateException ex)
-{
-    var baseEx = ex.GetBaseException();
-    // MySQL/MariaDB duplicate key
-    if (baseEx is MySqlException myEx)
-        return myEx.Number == 1062; // ER_DUP_ENTRY
-    return false;
-}
-
+        private static bool IsUniqueViolation(DbUpdateException ex)
+        {
+            var baseEx = ex.GetBaseException();
+            return baseEx is MySqlException my && my.Number == 1062; // duplicate key
+        }
 
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterDto dto)
@@ -137,7 +134,7 @@ namespace UserManagementApp.Controllers
         public async Task<IActionResult> Block([FromBody] IdsDto dto)
         {
             if (dto?.Ids == null || dto.Ids.Count == 0)
-                return BadRequest(new { message = "No user ids provided." });
+                return BadRequest(new { message = "Select at least one user." });
 
             var users = await _db.Users.Where(u => dto.Ids.Contains(u.Id)).ToListAsync();
             bool blockedSelf = false;
@@ -148,14 +145,12 @@ namespace UserManagementApp.Controllers
                 foreach (var u in users)
                 {
                     u.Status = "blocked";
-                    if (u.Id == currentUserId)
-                        blockedSelf = true;
+                    if (u.Id == currentUserId) blockedSelf = true;
                 }
             }
             else
             {
-                foreach (var u in users)
-                    u.Status = "blocked";
+                foreach (var u in users) u.Status = "blocked";
             }
 
             await _db.SaveChangesAsync();
@@ -174,43 +169,35 @@ namespace UserManagementApp.Controllers
         public async Task<IActionResult> Unblock([FromBody] IdsDto dto)
         {
             if (dto?.Ids == null || dto.Ids.Count == 0)
-                return BadRequest(new { message = "No user ids provided." });
+                return BadRequest(new { message = "Select at least one user." });
 
             var users = await _db.Users.Where(u => dto.Ids.Contains(u.Id)).ToListAsync();
 
             foreach (var u in users)
-            {
-                if (!string.IsNullOrEmpty(u.VerificationToken))
-                    u.Status = "unverified";
-                else
-                    u.Status = "active";
-            }
+                u.Status = string.IsNullOrEmpty(u.VerificationToken) ? "active" : "unverified";
 
             await _db.SaveChangesAsync();
             return Ok(new { message = "Selected users unblocked (verification preserved)." });
         }
 
-      [RequireUser]
-[HttpPost("delete-unverified")]
-public async Task<IActionResult> DeleteUnverified([FromBody] IdsDto dto)
-{
-   
-    if (dto?.Ids == null || dto.Ids.Count == 0)
-        return BadRequest(new { message = "Select at least one user." });
+        [RequireUser]
+        [HttpPost("delete-unverified")]
+        public async Task<IActionResult> DeleteUnverified([FromBody] IdsDto dto)
+        {
+            if (dto?.Ids == null || dto.Ids.Count == 0)
+                return BadRequest(new { message = "Select at least one user." });
 
-   
-    var toDelete = await _db.Users
-        .Where(u => dto.Ids.Contains(u.Id) && u.Status == "unverified")
-        .ToListAsync();
+            var toDelete = await _db.Users
+                .Where(u => dto.Ids.Contains(u.Id) && u.Status == "unverified")
+                .ToListAsync();
 
-    if (toDelete.Count == 0)
-        return NoContent();
+            if (toDelete.Count == 0)
+                return NoContent();
 
-    _db.Users.RemoveRange(toDelete);
-    await _db.SaveChangesAsync();
-    return Ok(new { deleted = toDelete.Select(u => u.Id).ToArray() });
-}
-
+            _db.Users.RemoveRange(toDelete);
+            await _db.SaveChangesAsync();
+            return Ok(new { deleted = toDelete.Select(u => u.Id).ToArray() });
+        }
 
         [RequireUser]
         [HttpPost("delete")]
@@ -221,12 +208,14 @@ public async Task<IActionResult> DeleteUnverified([FromBody] IdsDto dto)
             if (id.HasValue) allIds.Add(id.Value);
 
             if (!string.IsNullOrWhiteSpace(ids))
+            {
                 foreach (var s in ids.Split(',', StringSplitOptions.RemoveEmptyEntries))
                     if (int.TryParse(s.Trim(), out var v)) allIds.Add(v);
+            }
 
             allIds = allIds.Distinct().ToList();
             if (allIds.Count == 0)
-                return BadRequest(new { message = "No user ids provided." });
+                return BadRequest(new { message = "Select at least one user." });
 
             var toDelete = await _db.Users.Where(u => allIds.Contains(u.Id)).ToListAsync();
             _db.Users.RemoveRange(toDelete);
