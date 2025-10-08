@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Admin — Users</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{--green:#15a34a;--red:#ef4444;--yellow:#f59e0b;--bg:#0b0f14;--card:#10161d;--text:#dbe3ec;--muted:#92a3b4}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Inter,Arial,sans-serif}
+    .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
+    h1{font-size:22px;margin:0 0 16px}
+    .bar{display:flex;gap:8px;margin:14px 0}
+    button{border:1px solid #2a3440;background:#131a22;color:var(--text);padding:8px 12px;border-radius:8px;cursor:pointer}
+    button:hover{background:#18212b}
+    .danger{border-color:var(--red);color:#ffd7d7}.warn{border-color:var(--yellow);color:#fff4d6}.ok{border-color:var(--green);color:#d5ffe3}
+    table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid #243041;border-radius:10px;overflow:hidden}
+    th,td{padding:12px 14px;border-bottom:1px solid #1c2530;text-align:left}
+    th{background:#0f141a;color:#a9b6c5;font-weight:600}
+    tr:last-child td{border-bottom:none}
+    .chip{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:600}
+    .chip.active{background:rgba(21,163,74,.15);color:#bdf5cb;border:1px solid rgba(21,163,74,.5)}
+    .chip.blocked{background:rgba(239,68,68,.15);color:#ffd0d0;border:1px solid rgba(239,68,68,.5)}
+    .chip.unverified{background:rgba(245,158,11,.15);color:#ffe9bd;border:1px solid rgba(245,158,11,.5)}
+    .meta{margin-top:10px;color:var(--muted);font-size:13px}
+    .error{margin-top:14px;padding:12px;border:1px solid #743b3b;background:#2a1414;color:#ffd7d7;border-radius:8px;white-space:pre-wrap}
+    .hidden{display:none}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Admin — Users</h1>
+
+    <div id="error" class="error hidden"></div>
+
+    <div class="bar">
+      <button id="btnBlock">Block</button>
+      <button id="btnUnblock" class="ok">Unblock</button>
+      <button id="btnDelete" class="danger">Delete</button>
+      <button id="btnDeleteUnv" class="warn">Delete Unverified</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:36px;"><input type="checkbox" id="checkAll"></th>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Last login</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="rows"><tr><td colspan="5">Loading…</td></tr></tbody>
+    </table>
+
+    <div class="meta" id="meta"></div>
+  </div>
+
+<script>
+const API = p => `/api/User/${p}`;
+const rowsEl = document.getElementById('rows');
+const metaEl = document.getElementById('meta');
+const errorEl = document.getElementById('error');
+const checkAll = document.getElementById('checkAll');
+
+function showError(title, details){
+  errorEl.classList.remove('hidden');
+  errorEl.textContent = `${title}\n${details || ''}`;
+}
+
+checkAll.addEventListener('change', () => {
+  document.querySelectorAll('tbody input[type=checkbox]').forEach(cb => cb.checked = checkAll.checked);
+});
+
+function fmtDate(s){ if(!s) return ''; const d = new Date(s); return d.toLocaleDateString()+' '+d.toLocaleTimeString(); }
+function chip(st){ const c = st==='active'?'active':st==='blocked'?'blocked':'unverified'; return `<span class="chip ${c}">${st}</span>`; }
+function selectedIds(){ return Array.from(document.querySelectorAll('tbody input[type=checkbox]:checked')).map(cb => +cb.dataset.id); }
+
+async function fetchUsers(){
+  try{
+    const res = await fetch(API('all'), { cache:'no-store' });
+    if (res.status === 401) { location.href = 'login.html'; return; } 
+    const text = await res.text(); let data; try { data = JSON.parse(text); } catch { data = null; }
+    if(!res.ok){ showError(`GET /api/User/all failed (${res.status})`, text); rowsEl.innerHTML = `<tr><td colspan="5">Failed to load users.</td></tr>`; return; }
+    if(!Array.isArray(data)){ showError('Unexpected response from /api/User/all', text); rowsEl.innerHTML = `<tr><td colspan="5">Bad response.</td></tr>`; return; }
+
+    errorEl.classList.add('hidden');
+    rowsEl.innerHTML = data.map(u => `
+      <tr>
+        <td><input type="checkbox" data-id="${u.id}"></td>
+        <td>${u.name}</td>
+        <td>${u.email}</td>
+        <td>${fmtDate(u.lastLogin)}</td>
+        <td>${chip(u.status)}</td>
+      </tr>
+    `).join('') || `<tr><td colspan="5">No users</td></tr>`;
+    metaEl.textContent = `Loaded ${data.length} users`;
+    checkAll.checked = false;
+  }catch(e){
+    showError('JavaScript error while fetching users', String(e && e.stack || e));
+    rowsEl.innerHTML = `<tr><td colspan="5">Error.</td></tr>`;
+  }
+}
+
+async function doAction(endpoint, ids){
+  if(ids && ids.length === 0){ alert('Select at least one user.'); return; }
+  try{
+    const res = await fetch(API(endpoint), {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      body: ids ? JSON.stringify({ ids }) : null
+    });
+    if (res.status === 401) { location.href = 'login.html'; return; }
+    const text = await res.text();
+    if(!res.ok){ showError(`POST /api/User/${endpoint} failed (${res.status})`, text); return; }
+    await fetchUsers();
+  }catch(e){
+    showError(`Network/JS error calling /api/User/${endpoint}`, String(e && e.stack || e));
+  }
+}
+
+document.getElementById('btnBlock').onclick    = () => doAction('block', selectedIds());
+document.getElementById('btnUnblock').onclick  = () => doAction('unblock', selectedIds());
+document.getElementById('btnDelete').onclick   = () => doAction('delete', selectedIds());
+document.getElementById('btnDeleteUnv').onclick= () => doAction('delete-unverified');
+
+fetchUsers();
+</script>
+</body>
+</html>

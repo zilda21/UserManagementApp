@@ -1,0 +1,28 @@
+# build output
+bin/
+obj/
+publish/
+publishUserManagementApp/
+
+# VS / tooling
+.vscode/
+*.user
+*.suo
+*.log
+
+# configs you don't want in git
+appsettings.Development.json
+**/appsettings.*.local.json
+
+# VS publish artifacts (if any)
+*.pubxml
+*.pubxml.user
+
+# Misc
+*.db
+*.sqlite
+*.bak
+
+# Visual Studio service deps & launch settings (local only)
+Properties/ServiceDependencies/**
+Properties/launchSettings.json
