@@ -9,6 +9,6 @@
     <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.0" PrivateAssets="All" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.0" PrivateAssets="All" />
-    <PackageReference Include="MySqlConnector" Version="2.3.7" />
+    <!-- REMOVE the explicit MySqlConnector line -->
   </ItemGroup>
 </Project>
