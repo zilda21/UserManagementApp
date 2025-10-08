@@ -17,13 +17,15 @@ namespace UserManagementApp.Controllers
         public record LoginDto(string Email, string Password);
         public class IdsDto { public List<int> Ids { get; set; } = new(); }
 
-        private static bool IsUniqueViolation(DbUpdateException ex)
-        {
-            var baseEx = ex.GetBaseException();
-            if (baseEx is Microsoft.Data.SqlClient.SqlException sqlEx)
-                return sqlEx.Number == 2627 || sqlEx.Number == 2601;
-            return false;
-        }
+       private static bool IsUniqueViolation(DbUpdateException ex)
+{
+    var baseEx = ex.GetBaseException();
+    // MySQL/MariaDB duplicate key
+    if (baseEx is MySqlException myEx)
+        return myEx.Number == 1062; // ER_DUP_ENTRY
+    return false;
+}
+
 
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterDto dto)
