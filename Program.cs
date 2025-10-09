@@ -1,37 +1,39 @@
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using UserManagementApp.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Console logging
+// Basic console logging
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 
-// --- connection string (read from env first, then appsettings) ---
-string raw = Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")
-           ?? builder.Configuration.GetConnectionString("DefaultConnection")
-           ?? throw new InvalidOperationException("Missing 'DefaultConnection'.");
+// 1) Read connection string (ENV wins, then appsettings)
+string raw =
+    Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")
+    ?? builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("Missing 'DefaultConnection' connection string.");
 
-string Clean(string s)
+static string Clean(string s)
 {
-    // remove CR/LF/TAB and trim – these cause the 'ion\n server' error
+    // Remove CR/LF/TAB that can sneak in from copy/paste and break parsing
     return new string(s.Where(c => c != '\r' && c != '\n' && c != '\t').ToArray()).Trim();
 }
 var cs = Clean(raw);
 
-// log a redacted version so we can see exactly what EF sees
+// Log a redacted version so you can see exactly what EF sees
 try
 {
-    var redacted = System.Text.RegularExpressions.Regex.Replace(cs, @"Pwd=[^;]*", "Pwd=***", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-    builder.Logging.CreateLogger("ConnStr").LogInformation("Using MySQL conn string: {Conn}", redacted);
+    var redacted = Regex.Replace(cs, @"(?i)(Pwd|Password)=[^;]*", "$1=***");
+    Console.WriteLine($"[ConnStr] Using MySQL conn string: {redacted}");
 }
-catch { /* ignore logging problems */ }
+catch { /* best effort */ }
 
-// --- EF + Pomelo ---
+// 2) EF Core + Pomelo for MariaDB
 builder.Services.AddDbContext<AppDbContext>(opt =>
 {
-    var sv = ServerVersion.AutoDetect(cs); // detects MariaDB 10.11.x on AlwaysData
-    opt.UseMySql(cs, sv, my => my.EnableRetryOnFailure(5, TimeSpan.FromSeconds(3), null));
+    var serverVersion = ServerVersion.AutoDetect(cs);
+    opt.UseMySql(cs, serverVersion, my => my.EnableRetryOnFailure(5, TimeSpan.FromSeconds(3), null));
 });
 
 builder.Services.AddControllers();
@@ -47,7 +49,7 @@ app.UseStaticFiles();
 app.MapControllers();
 app.MapGet("/", () => Results.Redirect("/login.html"));
 
-// DB check + create table if needed
+// 3) DB connectivity + bootstrap table if missing
 try
 {
     using var scope = app.Services.CreateScope();
@@ -55,6 +57,7 @@ try
 
     await db.Database.OpenConnectionAsync();
 
+    // Create Users table if it doesn't exist (idempotent)
     await db.Database.ExecuteSqlRawAsync(@"
 CREATE TABLE IF NOT EXISTS `Users` (
   `Id` INT NOT NULL AUTO_INCREMENT,
@@ -69,6 +72,7 @@ CREATE TABLE IF NOT EXISTS `Users` (
   UNIQUE KEY `IX_Users_Email` (`Email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ");
+
     await db.Database.CloseConnectionAsync();
 }
 catch (Exception ex)
@@ -76,7 +80,7 @@ catch (Exception ex)
     app.Logger.LogError(ex, "❌ Database initialization/connection failed at startup.");
 }
 
-// health endpoint so you can see the real DB error in browser/logs
+// 4) Health endpoint to see the real DB error in browser/logs
 app.MapGet("/api/diag/db", async (AppDbContext db) =>
 {
     try
