@@ -1,31 +1,30 @@
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using MySqlConnector;
 using UserManagementApp.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Console logs help on Render
-builder.Logging.ClearProviders();
-builder.Logging.AddConsole();
+// ENV var wins; falls back to appsettings.json
+var cs = Environment.GetEnvironmentVariable("DefaultConnection")
+         ?? builder.Configuration.GetConnectionString("DefaultConnection")
+         ?? "";
 
-// 1) Get connection string EXACTLY as stored (no edits)
-string cs =
-    builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? Environment.GetEnvironmentVariable("DefaultConnection")
-    ?? "";
+// Validate & sanitize (this throws immediately on bad keys like "ionServer")
+try
+{
+    var csb = new MySqlConnectionStringBuilder(cs);
+    // print a masked version to logs (won't mutate keys)
+    var masked = new MySqlConnectionStringBuilder(csb.ConnectionString) { Password = "***" };
+    Console.WriteLine("[ConnStr] " + masked.ConnectionString);
+    cs = csb.ConnectionString; // normalized
+}
+catch (Exception ex)
+{
+    Console.WriteLine("❌ Invalid MySQL connection string: " + ex.Message);
+    throw;
+}
 
-cs = cs.Replace("\r", "").Replace("\n", "").Trim();
-
-// Optional: drop any junk BEFORE the first real key (Server= or Host=)
-int i = cs.IndexOf("Server=", StringComparison.OrdinalIgnoreCase);
-if (i < 0) i = cs.IndexOf("Host=", StringComparison.OrdinalIgnoreCase);
-if (i > 0) cs = cs.Substring(i);
-
-// Masked log so we can verify what we really use
-string masked = System.Text.RegularExpressions.Regex.Replace(cs, @"Password=[^;]*", "Password=***", RegexOptions.IgnoreCase);
-Console.WriteLine($"[ConnStr] {masked}");
-
-// 2) Wire EF Core
+// EF Core + Pomelo for MySQL/MariaDB
 builder.Services.AddDbContext<AppDbContext>(opt =>
     opt.UseMySql(cs, ServerVersion.AutoDetect(cs)));
 
@@ -33,28 +32,45 @@ builder.Services.AddControllersWithViews();
 
 var app = builder.Build();
 
-// Static site
-app.UseDefaultFiles();
-app.UseStaticFiles();
-
-app.UseRouting();
-app.UseAuthorization();
-
-// Tiny diag endpoint to test DB quickly
-app.MapGet("/api/diag/db", async ([FromServices] AppDbContext db) =>
+// Ensure DB/tables exist on boot (simple demo style)
+using (var scope = app.Services.CreateScope())
 {
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     try
     {
-        await db.Database.OpenConnectionAsync();
-        await db.Database.CloseConnectionAsync();
-        return Results.Ok("DB OK");
+        db.Database.EnsureCreated();
+        Console.WriteLine("✅ Database ready.");
     }
     catch (Exception ex)
     {
-        return Results.Problem("DB ERROR: " + ex.GetBaseException().Message, statusCode: 500);
+        Console.WriteLine("❌ DB init failed: " + ex.GetBaseException().Message);
+        throw;
+    }
+}
+
+// static files + default to index/login
+app.UseDefaultFiles();
+app.UseStaticFiles();
+app.UseRouting();
+app.UseAuthorization();
+
+app.MapControllers();
+
+// quick DB health check
+app.MapGet("/api/diag/db", async (AppDbContext db) =>
+{
+    try
+    {
+        var ok = await db.Database.CanConnectAsync();
+        return Results.Ok(new { canConnect = ok });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.GetBaseException().Message);
     }
 });
 
-app.MapGet("/", () => Results.Redirect("/login.html"));
-app.MapControllers();
+// send "/" to login page
+app.MapGet("/", ctx => { ctx.Response.Redirect("/login.html"); return Task.CompletedTask; });
+
 app.Run();
