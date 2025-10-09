@@ -1,87 +1,47 @@
-using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using UserManagementApp.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Basic console logging
+// Console logs help on Render
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 
-// 1) Read connection string (ENV wins, then appsettings)
-string raw =
-    Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")
-    ?? builder.Configuration.GetConnectionString("DefaultConnection")
-    ?? throw new InvalidOperationException("Missing 'DefaultConnection' connection string.");
+// 1) Get connection string EXACTLY as stored (no edits)
+string cs =
+    builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? Environment.GetEnvironmentVariable("DefaultConnection")
+    ?? "";
 
-static string Clean(string s)
-{
-    // Remove CR/LF/TAB that can sneak in from copy/paste and break parsing
-    return new string(s.Where(c => c != '\r' && c != '\n' && c != '\t').ToArray()).Trim();
-}
-var cs = Clean(raw);
+cs = cs.Replace("\r", "").Replace("\n", "").Trim();
 
-// Log a redacted version so you can see exactly what EF sees
-try
-{
-    var redacted = Regex.Replace(cs, @"(?i)(Pwd|Password)=[^;]*", "$1=***");
-    Console.WriteLine($"[ConnStr] Using MySQL conn string: {redacted}");
-}
-catch { /* best effort */ }
+// Optional: drop any junk BEFORE the first real key (Server= or Host=)
+int i = cs.IndexOf("Server=", StringComparison.OrdinalIgnoreCase);
+if (i < 0) i = cs.IndexOf("Host=", StringComparison.OrdinalIgnoreCase);
+if (i > 0) cs = cs.Substring(i);
 
-// 2) EF Core + Pomelo for MariaDB
+// Masked log so we can verify what we really use
+string masked = System.Text.RegularExpressions.Regex.Replace(cs, @"Password=[^;]*", "Password=***", RegexOptions.IgnoreCase);
+Console.WriteLine($"[ConnStr] {masked}");
+
+// 2) Wire EF Core
 builder.Services.AddDbContext<AppDbContext>(opt =>
-{
-    var serverVersion = ServerVersion.AutoDetect(cs);
-    opt.UseMySql(cs, serverVersion, my => my.EnableRetryOnFailure(5, TimeSpan.FromSeconds(3), null));
-});
+    opt.UseMySql(cs, ServerVersion.AutoDetect(cs)));
 
-builder.Services.AddControllers();
+builder.Services.AddControllersWithViews();
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
-    app.UseDeveloperExceptionPage();
-
+// Static site
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-app.MapControllers();
-app.MapGet("/", () => Results.Redirect("/login.html"));
+app.UseRouting();
+app.UseAuthorization();
 
-// 3) DB connectivity + bootstrap table if missing
-try
-{
-    using var scope = app.Services.CreateScope();
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-    await db.Database.OpenConnectionAsync();
-
-    // Create Users table if it doesn't exist (idempotent)
-    await db.Database.ExecuteSqlRawAsync(@"
-CREATE TABLE IF NOT EXISTS `Users` (
-  `Id` INT NOT NULL AUTO_INCREMENT,
-  `Name` VARCHAR(100) NOT NULL,
-  `Email` VARCHAR(200) NOT NULL,
-  `Password` VARCHAR(255) NOT NULL,
-  `Status` VARCHAR(20) NOT NULL DEFAULT 'unverified',
-  `LastLogin` DATETIME(6) NULL,
-  `CreatedAt` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-  `VerificationToken` VARCHAR(510) NULL,
-  PRIMARY KEY (`Id`),
-  UNIQUE KEY `IX_Users_Email` (`Email`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-");
-
-    await db.Database.CloseConnectionAsync();
-}
-catch (Exception ex)
-{
-    app.Logger.LogError(ex, "❌ Database initialization/connection failed at startup.");
-}
-
-// 4) Health endpoint to see the real DB error in browser/logs
-app.MapGet("/api/diag/db", async (AppDbContext db) =>
+// Tiny diag endpoint to test DB quickly
+app.MapGet("/api/diag/db", async ([FromServices] AppDbContext db) =>
 {
     try
     {
@@ -95,4 +55,6 @@ app.MapGet("/api/diag/db", async (AppDbContext db) =>
     }
 });
 
+app.MapGet("/", () => Results.Redirect("/login.html"));
+app.MapControllers();
 app.Run();
