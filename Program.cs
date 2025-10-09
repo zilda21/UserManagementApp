@@ -3,42 +3,51 @@ using UserManagementApp.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Console logs in Render
+// Console logging
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 
-// --- MySQL/MariaDB via Pomelo, with auto-detect + retry ---
-var cs = builder.Configuration.GetConnectionString("DefaultConnection")
-         ?? throw new InvalidOperationException("Missing connection string 'DefaultConnection'.");
+// --- connection string (read from env first, then appsettings) ---
+string raw = Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")
+           ?? builder.Configuration.GetConnectionString("DefaultConnection")
+           ?? throw new InvalidOperationException("Missing 'DefaultConnection'.");
 
+string Clean(string s)
+{
+    // remove CR/LF/TAB and trim – these cause the 'ion\n server' error
+    return new string(s.Where(c => c != '\r' && c != '\n' && c != '\t').ToArray()).Trim();
+}
+var cs = Clean(raw);
+
+// log a redacted version so we can see exactly what EF sees
+try
+{
+    var redacted = System.Text.RegularExpressions.Regex.Replace(cs, @"Pwd=[^;]*", "Pwd=***", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    builder.Logging.CreateLogger("ConnStr").LogInformation("Using MySQL conn string: {Conn}", redacted);
+}
+catch { /* ignore logging problems */ }
+
+// --- EF + Pomelo ---
 builder.Services.AddDbContext<AppDbContext>(opt =>
 {
-    var sv = ServerVersion.AutoDetect(cs);
-    opt.UseMySql(cs, sv, my => my.EnableRetryOnFailure(
-        maxRetryCount: 5,
-        maxRetryDelay: TimeSpan.FromSeconds(3),
-        errorNumbersToAdd: null
-    ));
+    var sv = ServerVersion.AutoDetect(cs); // detects MariaDB 10.11.x on AlwaysData
+    opt.UseMySql(cs, sv, my => my.EnableRetryOnFailure(5, TimeSpan.FromSeconds(3), null));
 });
 
 builder.Services.AddControllers();
 
 var app = builder.Build();
 
-// In containers, don't force HTTPS if the platform doesn't configure it
 if (app.Environment.IsDevelopment())
-{
     app.UseDeveloperExceptionPage();
-}
-app.UseDefaultFiles();   // serve wwwroot/index.html as default
+
+app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.MapControllers();
-
-// quick redirect if you prefer:
 app.MapGet("/", () => Results.Redirect("/login.html"));
 
-// ---- DB self-test + bootstrap table (prints real error to Render logs) ----
+// DB check + create table if needed
 try
 {
     using var scope = app.Services.CreateScope();
@@ -46,7 +55,6 @@ try
 
     await db.Database.OpenConnectionAsync();
 
-    // Create table if it doesn't exist (MySQL/MariaDB-safe DDL)
     await db.Database.ExecuteSqlRawAsync(@"
 CREATE TABLE IF NOT EXISTS `Users` (
   `Id` INT NOT NULL AUTO_INCREMENT,
@@ -68,7 +76,7 @@ catch (Exception ex)
     app.Logger.LogError(ex, "❌ Database initialization/connection failed at startup.");
 }
 
-// health probe to see exact DB status in browser/logs
+// health endpoint so you can see the real DB error in browser/logs
 app.MapGet("/api/diag/db", async (AppDbContext db) =>
 {
     try
